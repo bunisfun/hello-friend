@@ -161,65 +161,331 @@ export default function HubPage() {
   }
 
   return (
-    <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 pb-32">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6 pt-2">
-        <div>
-          <h1 className="text-3xl font-black uppercase tracking-tight text-white">Hub</h1>
-          <p className="text-xs text-white/40 uppercase tracking-[0.2em] mt-1">Web3 Social · zkLTC</p>
-        </div>
-        {myName && (
-          <div className="px-4 py-2 rounded-full bg-white/5 border border-white/10 backdrop-blur-xl">
-            <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">Your name</div>
-            <div className="text-sm font-bold text-white">{myName}.lit</div>
-          </div>
-        )}
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-2 mb-6 bg-black/30 border border-white/5 rounded-2xl p-1.5 backdrop-blur-xl">
-        {[
-          { id: "global", label: "Global", icon: Globe },
-          { id: "private", label: "Private", icon: Users },
-          { id: "market", label: ".lit Market", icon: Store },
-        ].map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id as any)}
-              className={`flex-1 flex items-center justify-center gap-2 py-3 px-3 rounded-xl text-xs sm:text-sm font-bold uppercase tracking-[0.15em] transition-all ${
-                active ? "bg-white text-black" : "text-white/60 hover:text-white"
-              }`}
-            >
-              <Icon size={14} />
-              <span className="hidden sm:inline">{t.label}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {checkingName && (
+    <>
+      {checkingName ? (
         <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 text-white/40 animate-spin" /></div>
+      ) : (
+        <ChatShell myAddress={address!} myName={myName} onOpenSend={() => setShowSendModal(true)} />
       )}
-
-      {!checkingName && tab === "global" && <GlobalFeed myName={myName} myAddress={address!} />}
-      {!checkingName && tab === "private" && <PrivateTab myAddress={address!} />}
-      {!checkingName && tab === "market" && <MarketTab myAddress={address!} myName={myName} />}
-
-      {/* Floating Send button */}
-      <button
-        onClick={() => setShowSendModal(true)}
-        className="fixed bottom-6 right-6 z-40 px-5 py-3.5 rounded-full bg-white text-black font-bold text-sm uppercase tracking-[0.15em] shadow-2xl hover:scale-105 transition-transform flex items-center gap-2"
-      >
-        <Send size={16} /> Send zkLTC
-      </button>
-
-      {/* Modals */}
       <AnimatePresence>
         {showSendModal && <SendZkLTCModal onClose={() => setShowSendModal(false)} />}
       </AnimatePresence>
+    </>
+  );
+}
+
+// ============ Chat Shell (WhatsApp-style 3-pane layout) ============
+function ChatShell({ myAddress, myName, onOpenSend }: { myAddress: string; myName: string | null; onOpenSend: () => void }) {
+  const [pane, setPane] = useState<"chats" | "market">("chats");
+  const [chatTab, setChatTab] = useState<"private" | "global">("private");
+  const [activeDM, setActiveDM] = useState<any | null>(null);
+  const [activeGlobal, setActiveGlobal] = useState(false);
+  const [search, setSearch] = useState("");
+  const [friends, setFriends] = useState<any[]>([]);
+  const [requests, setRequests] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+
+  const loadFriends = async () => {
+    setLoading(true);
+    try {
+      const [f, r] = await Promise.all([
+        backendGet(`/hub/messenger/friends/${myAddress}`).catch(() => ({ friends: [] })),
+        backendGet(`/hub/messenger/requests/${myAddress}`).catch(() => ({ requests: [] })),
+      ]);
+      const rawFriends = Array.isArray(f?.friends) ? f.friends : [];
+      const rawRequests = Array.isArray(r?.requests) ? r.requests : [];
+      const enrich = async (list: any[], addrKey: string, nameKey: string) =>
+        Promise.all(list.map(async (item) => {
+          if (item[nameKey]) return item;
+          const addr = item[addrKey] || item.address || item;
+          try { const d = await backendGet(`/hub/name/reverse/${addr}`); return { ...item, [nameKey]: d?.name || null }; }
+          catch { return item; }
+        }));
+      const [fe, re] = await Promise.all([
+        enrich(rawFriends, "address", "name"),
+        enrich(rawRequests, "from", "fromName"),
+      ]);
+      setFriends(fe); setRequests(re);
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadFriends(); }, [myAddress]);
+
+  const visibleFriends = friends.filter((f) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (f.name || "").toLowerCase().includes(q) || (f.address || "").toLowerCase().includes(q);
+  });
+
+  // mobile: show right pane only when an item is active
+  const hasActive = activeDM || activeGlobal;
+
+  return (
+    <div className="w-full h-[calc(100vh-4rem)] flex bg-black text-white overflow-hidden">
+      {/* ============ LEFT RAIL ============ */}
+      <aside className="hidden md:flex w-[200px] flex-col border-r border-white/10 bg-black/40 backdrop-blur-xl">
+        <div className="px-4 py-4 border-b border-white/10">
+          <div className="text-[10px] uppercase tracking-[0.25em] text-white/40">Navigate</div>
+        </div>
+        <nav className="flex-1 px-2 py-3 space-y-1">
+          <RailItem icon={Store} label=".lit Market" active={pane === "market"} onClick={() => setPane("market")} />
+          <RailItem icon={MessageCircle} label="Chats" active={pane === "chats"} onClick={() => setPane("chats")} />
+          <RailItem icon={Send} label="Send zkLTC" onClick={onOpenSend} />
+        </nav>
+        <div className="px-2 pb-3 space-y-1">
+          <RailItem icon={Settings} label="Settings" onClick={() => {}} />
+          <div className="mt-2 px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 flex items-center gap-2">
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-white/30 to-white/5 flex items-center justify-center text-[11px] font-black">
+              {(myName || myAddress).slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-bold truncate">{myName ? `${myName}.lit` : shortAddr(myAddress)}</div>
+              <div className="text-[9px] text-white/40 uppercase tracking-wider">Online</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* mobile top rail */}
+      <div className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-black/90 backdrop-blur-xl border-t border-white/10 flex">
+        {[
+          { id: "chats", label: "Chats", icon: MessageCircle },
+          { id: "market", label: ".lit Market", icon: Store },
+        ].map((it) => {
+          const Icon = it.icon;
+          const active = pane === it.id;
+          return (
+            <button key={it.id} onClick={() => { setPane(it.id as any); setActiveDM(null); setActiveGlobal(false); }}
+              className={`flex-1 flex flex-col items-center gap-1 py-2.5 text-[10px] font-bold uppercase tracking-wider ${active ? "text-white" : "text-white/40"}`}>
+              <Icon size={18} />{it.label}
+            </button>
+          );
+        })}
+        <button onClick={onOpenSend} className="flex-1 flex flex-col items-center gap-1 py-2.5 text-[10px] font-bold uppercase tracking-wider text-white/40">
+          <Send size={18} />Send
+        </button>
+      </div>
+
+      {/* ============ MAIN AREA ============ */}
+      {pane === "market" ? (
+        <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 pb-24 md:pb-6">
+          <div className="max-w-5xl mx-auto">
+            <h2 className="text-2xl font-black uppercase tracking-tight mb-4">.lit Market</h2>
+            <MarketTab myAddress={myAddress} myName={myName} />
+          </div>
+        </main>
+      ) : (
+        <>
+          {/* MIDDLE PANE: contacts */}
+          <section className={`${hasActive ? "hidden md:flex" : "flex"} flex-col w-full md:w-[340px] border-r border-white/10 bg-black/30 backdrop-blur-xl`}>
+            {/* tabs header */}
+            <div className="px-4 pt-4 pb-2 flex items-center justify-between">
+              <div className="flex gap-1 bg-white/5 border border-white/10 rounded-xl p-1">
+                {[
+                  { id: "private", label: "Private" },
+                  { id: "global", label: "Global" },
+                ].map((t) => (
+                  <button key={t.id} onClick={() => { setChatTab(t.id as any); setActiveDM(null); setActiveGlobal(false); }}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition ${chatTab === t.id ? "bg-white text-black" : "text-white/60 hover:text-white"}`}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-1">
+                {chatTab === "private" && (
+                  <button onClick={() => setShowAdd((s) => !s)} className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-white/70 hover:bg-white/10">
+                    <SquarePen size={14} />
+                  </button>
+                )}
+                <button className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-white/70 hover:bg-white/10">
+                  <ListFilter size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* search */}
+            <div className="px-4 pb-3">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" />
+                <input
+                  value={search} onChange={(e) => setSearch(e.target.value)}
+                  placeholder={chatTab === "private" ? "Search friends" : "Search rooms"}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-9 pr-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-white/30"
+                />
+              </div>
+            </div>
+
+            {/* add-friend inline */}
+            {chatTab === "private" && showAdd && (
+              <AddFriendInline myAddress={myAddress} onAdded={() => { setShowAdd(false); loadFriends(); }} />
+            )}
+
+            {/* requests */}
+            {chatTab === "private" && requests.length > 0 && (
+              <div className="px-4 pb-2">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-1.5">Requests ({requests.length})</div>
+                <div className="space-y-1.5">
+                  {requests.map((r) => (
+                    <FriendRequestRow key={r.id ?? r.reqId} req={r} onResolved={loadFriends} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* list */}
+            <div className="flex-1 overflow-y-auto px-2 pb-24 md:pb-2">
+              {chatTab === "private" ? (
+                <>
+                  {loading && <div className="flex justify-center py-10"><Loader2 className="animate-spin text-white/40" size={20} /></div>}
+                  {!loading && visibleFriends.length === 0 && (
+                    <div className="text-center text-white/30 text-xs py-10 px-4">
+                      No friends yet. Tap <SquarePen size={12} className="inline" /> to add by .lit name.
+                    </div>
+                  )}
+                  {visibleFriends.map((f) => (
+                    <ContactRow key={f.address || f} friend={f} active={activeDM && (activeDM.address || activeDM) === (f.address || f)}
+                      onClick={() => { setActiveDM(f); setActiveGlobal(false); }} />
+                  ))}
+                </>
+              ) : (
+                <GlobalRoomList active={activeGlobal} onOpen={() => { setActiveGlobal(true); setActiveDM(null); }} />
+              )}
+            </div>
+          </section>
+
+          {/* RIGHT PANE: active chat */}
+          <section className={`${hasActive ? "flex" : "hidden md:flex"} flex-1 flex-col bg-gradient-to-br from-black via-zinc-950 to-black`}>
+            {activeDM ? (
+              <DMChat me={myAddress} friend={activeDM} onBack={() => setActiveDM(null)} />
+            ) : activeGlobal ? (
+              <GlobalRoomChat myName={myName} myAddress={myAddress} onBack={() => setActiveGlobal(false)} />
+            ) : (
+              <div className="flex-1 hidden md:flex flex-col items-center justify-center text-center px-6">
+                <MessageCircle className="w-12 h-12 text-white/20 mb-4" />
+                <div className="text-lg font-bold text-white/60">Select a conversation</div>
+                <div className="text-xs text-white/30 mt-1">Your messages are signed on-chain via LIT Messenger.</div>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RailItem({ icon: Icon, label, active, onClick }: { icon: any; label: string; active?: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick}
+      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition ${active ? "bg-white text-black" : "text-white/70 hover:bg-white/5"}`}>
+      <Icon size={16} />{label}
+    </button>
+  );
+}
+
+function ContactRow({ friend, active, onClick }: { friend: any; active?: boolean; onClick: () => void }) {
+  const addr = friend.address || friend;
+  const name = friend.name;
+  return (
+    <button onClick={onClick}
+      className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition ${active ? "bg-white/10" : "hover:bg-white/5"}`}>
+      <div className="w-11 h-11 rounded-full bg-gradient-to-br from-white/25 to-white/5 flex items-center justify-center font-black text-white shrink-0">
+        {((name || addr || "?") as string).slice(0, 1).toUpperCase()}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-bold truncate">{name ? `${name}.lit` : shortAddr(addr)}</div>
+        <div className="text-[11px] text-white/40 truncate">{shortAddr(addr)}</div>
+      </div>
+    </button>
+  );
+}
+
+function FriendRequestRow({ req, onResolved }: { req: any; onResolved: () => void }) {
+  const respond = async (accept: boolean) => {
+    try {
+      const id = req.id ?? req.reqId;
+      await writeContract(LIT_MESSENGER, MESSENGER_ABI, accept ? "acceptFriendRequest" : "rejectFriendRequest", [id]);
+      showSuccess({ title: accept ? "Friend added!" : "Request rejected", rows: [] });
+      onResolved();
+    } catch (e: any) { showError(e?.shortMessage || e?.message || "Failed"); }
+  };
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 flex items-center justify-between gap-2">
+      <div className="text-xs text-white truncate">{req.fromName ? `${req.fromName}.lit` : shortAddr(req.from)}</div>
+      <div className="flex gap-1 shrink-0">
+        <button onClick={() => respond(true)} className="w-7 h-7 rounded-lg bg-green-500/20 text-green-300 border border-green-500/30 flex items-center justify-center"><Check size={12} /></button>
+        <button onClick={() => respond(false)} className="w-7 h-7 rounded-lg bg-red-500/20 text-red-300 border border-red-500/30 flex items-center justify-center"><X size={12} /></button>
+      </div>
+    </div>
+  );
+}
+
+function AddFriendInline({ myAddress, onAdded }: { myAddress: string; onAdded: () => void }) {
+  const [val, setVal] = useState("");
+  const [adding, setAdding] = useState(false);
+  const add = async () => {
+    if (!val.trim()) return;
+    try {
+      setAdding(true);
+      let target = val.trim();
+      if (!target.startsWith("0x")) {
+        const r = await backendGet(`/hub/name/resolve/${target.replace(/\.lit$/i, "")}`).catch(() => null);
+        target = r?.address || target;
+        if (!target.startsWith("0x")) throw new Error("Name not found");
+      }
+      await writeContract(LIT_MESSENGER, MESSENGER_ABI, "sendFriendRequest", [target]);
+      showSuccess({ title: "Friend request sent!", rows: [{ label: "To", value: shortAddr(target) }] });
+      setVal(""); onAdded();
+    } catch (e: any) { showError(e?.shortMessage || e?.message || "Failed"); }
+    finally { setAdding(false); }
+  };
+  return (
+    <div className="px-4 pb-3 flex gap-2">
+      <input value={val} onChange={(e) => setVal(e.target.value)} placeholder=".lit name or 0x..." className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white outline-none placeholder:text-white/30" />
+      <button onClick={add} disabled={adding} className="px-3 py-2 rounded-xl bg-white text-black text-xs font-bold disabled:opacity-40">
+        {adding ? <Loader2 className="animate-spin" size={12} /> : "Add"}
+      </button>
+    </div>
+  );
+}
+
+// ============ Global Room (placeholder shell — backend hook comes next) ============
+function GlobalRoomList({ active, onOpen }: { active: boolean; onOpen: () => void }) {
+  return (
+    <div className="px-1 pt-1">
+      <button onClick={onOpen} className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition ${active ? "bg-white/10" : "hover:bg-white/5"}`}>
+        <div className="w-11 h-11 rounded-full bg-gradient-to-br from-green-400/30 to-blue-500/20 border border-white/10 flex items-center justify-center shrink-0">
+          <Globe size={18} className="text-white" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-bold truncate">Global Room</div>
+          <div className="text-[11px] text-white/40 truncate">All .lit users · public</div>
+        </div>
+      </button>
+    </div>
+  );
+}
+
+function GlobalRoomChat({ myName, myAddress, onBack }: { myName: string | null; myAddress: string; onBack: () => void }) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-4 py-3 border-b border-white/10 flex items-center gap-3 bg-black/40 backdrop-blur-xl">
+        <button onClick={onBack} className="md:hidden text-white/60 hover:text-white"><ArrowLeft size={18} /></button>
+        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400/30 to-blue-500/20 border border-white/10 flex items-center justify-center"><Globe size={16} /></div>
+        <div>
+          <div className="text-sm font-bold">Global Room</div>
+          <div className="text-[10px] text-white/40 uppercase tracking-wider">Public · on-chain</div>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center justify-center text-center">
+        <Sparkles className="w-10 h-10 text-white/20 mb-3" />
+        <div className="text-sm font-bold text-white/70">Global broadcasts coming soon</div>
+        <div className="text-xs text-white/40 mt-1 max-w-xs">Hook this up to the on-chain feed next. UI shell is ready.</div>
+      </div>
+      <div className="p-3 border-t border-white/10 flex gap-2 bg-black/40">
+        <input disabled placeholder="Coming soon..." className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white/40 outline-none" />
+        <button disabled className="px-4 py-2 rounded-xl bg-white/20 text-white/40 text-xs font-bold flex items-center gap-1"><Send size={12} /></button>
+      </div>
     </div>
   );
 }
