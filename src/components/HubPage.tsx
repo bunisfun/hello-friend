@@ -505,7 +505,10 @@ function RequestRow({ req, onResolved }: { req: any; onResolved: () => void }) {
   };
   return (
     <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 flex items-center justify-between gap-2">
-      <div className="text-xs text-white truncate">{req.fromName ? `${req.fromName}.lit` : shortAddr(req.from)}</div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs text-white truncate font-semibold">{req.fromName ? `${req.fromName}.lit` : shortAddr(req.from)}</div>
+        <div className="text-[10px] text-white/40 truncate">{shortAddr(req.from)} · {req.postCount ?? 0} posts</div>
+      </div>
       <div className="flex gap-1 shrink-0">
         <button onClick={() => respond(true)} className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center justify-center"><Check size={12} /></button>
         <button onClick={() => respond(false)} className="w-7 h-7 rounded-lg bg-red-500/20 text-red-300 border border-red-500/30 flex items-center justify-center"><X size={12} /></button>
