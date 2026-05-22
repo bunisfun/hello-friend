@@ -238,7 +238,7 @@ function ChatShell({ myAddress, myName }: { myAddress: string; myName: string })
           <ListingDetail listing={activeListing} myAddress={myAddress} myName={myName} onBack={() => setActiveListing(null)} />
         )}
         {page === "market" && !activeListing && (
-          <ListYourName myName={myName} />
+          <ListYourName myName={myName} myAddress={myAddress} />
         )}
         {!activeFriend && !activePost && !activeListing && page === "messages" && (
           <EmptyRight icon={MessageCircle} title="Select a conversation" sub="Your messages are signed on-chain via LIT Messenger." />
