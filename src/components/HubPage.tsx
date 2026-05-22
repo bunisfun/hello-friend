@@ -415,12 +415,15 @@ function PostCard({ post, myAddress, onChange }: { post: any; myAddress: string;
   const creator = post.creator || post.author || "";
   const creatorName = post.creatorName || post.litName;
   const content = post.content || "";
-  const likeReward = post.likeReward || post.likeRewardWei || "0";
-  const commentReward = post.commentReward || post.commentRewardWei || "0";
-  const bounty = post.bounty || post.bountyBalance || "0";
-  const likes = post.likes || post.likeCount || 0;
-  const comments = post.comments || post.commentCount || 0;
-  const bountyActive = post.bountyActive !== false && BigInt(bounty || "0") > 0n;
+  // API returns these as already-formatted strings (e.g. "0.01" zkLTC). Do NOT pass to ethers/BigInt.
+  const likeReward = String(post.likeReward ?? "0");
+  const commentReward = String(post.commentReward ?? "0");
+  const bounty = String(post.bountyBalance ?? post.bounty ?? "0");
+  const likes = String(post.likeCount ?? post.likes ?? "0");
+  const comments = String(post.commentCount ?? post.comments ?? "0");
+  const bountyActive = typeof post.bountyActive === "boolean"
+    ? post.bountyActive
+    : (parseFloat(bounty) > 0);
 
   const [liking, setLiking] = useState(false);
   const [commenting, setCommenting] = useState(false);
@@ -481,7 +484,7 @@ function PostCard({ post, myAddress, onChange }: { post: any; myAddress: string;
         </div>
         {bountyActive ? (
           <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-green-500/20 text-green-300 border border-green-500/30">
-            {formatEther(bounty)} zkLTC bounty
+            {bounty} zkLTC bounty
           </span>
         ) : (
           <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-white/5 text-white/40 border border-white/10">Bounty ended</span>
@@ -499,14 +502,14 @@ function PostCard({ post, myAddress, onChange }: { post: any; myAddress: string;
           } disabled:opacity-50`}
         >
           <Heart size={14} fill={hasLiked ? "currentColor" : "none"} /> {likes}
-          {BigInt(likeReward || "0") > 0n && <span className="text-green-400">+{formatEther(likeReward)}</span>}
+          {parseFloat(likeReward) > 0 && <span className="text-green-400">+{likeReward}</span>}
         </button>
         <button
           onClick={() => setShowComment((s) => !s)}
           className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-white/5 border border-white/10 text-white/70 hover:bg-white/10"
         >
           <MessageCircle size={14} /> {comments}
-          {BigInt(commentReward || "0") > 0n && <span className="text-green-400">+{formatEther(commentReward)}</span>}
+          {parseFloat(commentReward) > 0 && <span className="text-green-400">+{commentReward}</span>}
         </button>
         <button onClick={share} className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 ml-auto">
           <Share2 size={14} /> Share
