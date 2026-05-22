@@ -50,6 +50,8 @@ const MESSENGER_ABI = [
   "function rejectFriendRequest(uint256 reqId)",
   "function sendMessage(address to, string contentHash, string msgType)",
   "function sendZkLTC(address to, string note) payable",
+  "function requestCount() view returns (uint256)",
+  "function friendRequests(uint256) view returns (address from, address to, uint8 status, uint256 sentAt)",
 ];
 const TRANSFER_ABI = [
   "function sendToName(string toLitName, string note) payable",
