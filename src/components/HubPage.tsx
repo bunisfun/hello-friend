@@ -778,7 +778,7 @@ function DMChat({ me, friend, onBack }: { me: string; friend: any; onBack: () =>
               <div key={i} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[75%] px-3 py-2 rounded-2xl text-sm ${mine ? "bg-white text-black" : "bg-white/10 text-white"}`}>
                   {m.content || m.contentHash}
-                  {m.value && BigInt(m.value || "0") > 0n && <div className="text-[10px] mt-1 opacity-70">💸 {formatEther(m.value)} zkLTC</div>}
+                  {m.value && parseFloat(String(m.value)) > 0 && <div className="text-[10px] mt-1 opacity-70">💸 {String(m.value)} zkLTC</div>}
                 </div>
               </div>
             );
@@ -821,7 +821,8 @@ function MarketTab({ myAddress, myName }: { myAddress: string; myName: string | 
 
   const buy = async (l: any) => {
     try {
-      await writeContract(LIT_MARKETPLACE, MARKETPLACE_ABI, "buyName", [l.name], BigInt(l.price));
+      // l.price comes from API as already-formatted string (e.g. "0.01"). Convert to wei only for the tx.
+      await writeContract(LIT_MARKETPLACE, MARKETPLACE_ABI, "buyName", [l.name], parseEther(String(l.price || "0")));
       showSuccess({ title: "Name purchased!", rows: [{ label: "Name", value: `${l.name}.lit` }] });
       setTimeout(load, 1500);
     } catch (e: any) { showError(e?.shortMessage || e?.message || "Buy failed"); }
@@ -884,7 +885,7 @@ function MarketTab({ myAddress, myName }: { myAddress: string; myName: string | 
             <div key={l.name} className="bg-white/5 border border-white/10 rounded-3xl p-4">
               <div className="text-xl font-black text-white mb-1">{l.name}.lit</div>
               <div className="text-[10px] text-white/40 mb-3">{shortAddr(l.seller)}</div>
-              <div className="text-lg font-bold text-white mb-3">{formatEther(l.price || "0")} zkLTC</div>
+              <div className="text-lg font-bold text-white mb-3">{String(l.price ?? "0")} zkLTC</div>
               <div className="flex gap-2">
                 <button onClick={() => buy(l)} className="flex-1 py-2 rounded-xl bg-white text-black text-xs font-bold">Buy</button>
                 <button onClick={() => bid(l)} className="px-4 py-2 rounded-xl bg-white/10 text-white text-xs font-bold border border-white/10">Bid</button>
