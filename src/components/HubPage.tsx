@@ -343,6 +343,7 @@ function WalletFooter({ myName, myAddress, collapsed }: { myName: string | null;
 function MessagesMiddle({
   myAddress, chatTab, setChatTab, activeFriend, setActiveFriend, activePost, setActivePost,
 }: any) {
+  const [pendingCount, setPendingCount] = useState(0);
   return (
     <>
       {/* Header */}
@@ -362,22 +363,25 @@ function MessagesMiddle({
             { id: "global", label: "Global" },
           ].map((t) => (
             <button key={t.id} onClick={() => setChatTab(t.id)}
-              className={`flex-1 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition ${chatTab === t.id ? "bg-emerald-500 text-black" : "text-white/60 hover:text-white"}`}>
+              className={`relative flex-1 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition ${chatTab === t.id ? "bg-emerald-500 text-black" : "text-white/60 hover:text-white"}`}>
               {t.label}
+              {t.id === "private" && pendingCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center">{pendingCount}</span>
+              )}
             </button>
           ))}
         </div>
       </div>
 
       {chatTab === "private"
-        ? <PrivateList myAddress={myAddress} activeFriend={activeFriend} setActiveFriend={setActiveFriend} />
+        ? <PrivateList myAddress={myAddress} activeFriend={activeFriend} setActiveFriend={setActiveFriend} onPendingCount={setPendingCount} />
         : <GlobalList myAddress={myAddress} activePost={activePost} setActivePost={setActivePost} />}
     </>
   );
 }
 
 // -------- PRIVATE LIST --------
-function PrivateList({ myAddress, activeFriend, setActiveFriend }: any) {
+function PrivateList({ myAddress, activeFriend, setActiveFriend, onPendingCount }: any) {
   const [friends, setFriends] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -387,24 +391,44 @@ function PrivateList({ myAddress, activeFriend, setActiveFriend }: any) {
   const load = async () => {
     setLoading(true);
     try {
-      const [f, r] = await Promise.all([
-        backendGet(`/hub/messenger/friends/${myAddress}`).catch(() => ({ friends: [] })),
-        backendGet(`/hub/messenger/requests/${myAddress}`).catch(() => ({ requests: [] })),
-      ]);
+      // Friends from backend
+      const f = await backendGet(`/hub/messenger/friends/${myAddress}`).catch(() => ({ friends: [] }));
       const rawF = Array.isArray(f?.friends) ? f.friends : [];
-      const rawR = Array.isArray(r?.requests) ? r.requests : [];
-      const enrich = async (list: any[], aKey: string, nKey: string) =>
-        Promise.all(list.map(async (i) => {
-          if (i[nKey]) return i;
-          const addr = i[aKey] || i.address || i;
-          try { const d = await backendGet(`/hub/name/reverse/${addr}`); return { ...i, [nKey]: d?.name || null }; }
-          catch { return i; }
-        }));
-      const [fe, re] = await Promise.all([enrich(rawF, "address", "name"), enrich(rawR, "from", "fromName")]);
-      setFriends(fe); setRequests(re);
+      const fe = await Promise.all(rawF.map(async (i: any) => {
+        if (i.name) return i;
+        const addr = i.address || i;
+        const n = await reverseName(addr);
+        return typeof i === "object" ? { ...i, name: n } : { address: addr, name: n };
+      }));
+      setFriends(fe);
+
+      // Friend requests on-chain
+      const reqs: any[] = [];
+      try {
+        const provider = new BrowserProvider((window as any).ethereum);
+        const c = new Contract(LIT_MESSENGER, MESSENGER_ABI, provider);
+        const total = Number(await c.requestCount());
+        const me = myAddress.toLowerCase();
+        // Fetch all requests in parallel
+        const all = await Promise.all(
+          Array.from({ length: total }, (_, i) => c.friendRequests(i + 1).then((r: any) => ({ reqId: i + 1, from: r[0], to: r[1], status: Number(r[2]), sentAt: Number(r[3]) })).catch(() => null))
+        );
+        for (const r of all) {
+          if (r && r.to.toLowerCase() === me && r.status === 0) reqs.push(r);
+        }
+      } catch {}
+      // Enrich requests with name + post count
+      const allPosts = await backendGet("/hub/posts").then(d => d?.posts || []).catch(() => []);
+      const reqsEnriched = await Promise.all(reqs.map(async (r) => {
+        const name = await reverseName(r.from);
+        const postCount = allPosts.filter((p: any) => (p.creator || "").toLowerCase() === r.from.toLowerCase()).length;
+        return { ...r, fromName: name, postCount };
+      }));
+      setRequests(reqsEnriched);
+      onPendingCount?.(reqsEnriched.length);
     } finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, [myAddress]);
+  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [myAddress]);
 
   const visible = friends.filter((f) => {
     if (!search.trim()) return true;
