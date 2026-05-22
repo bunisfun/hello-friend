@@ -95,6 +95,27 @@ async function backendGet(path: string) {
 }
 const shortAddr = (a?: string) => (a ? `${a.slice(0, 6)}...${a.slice(-4)}` : "");
 const letterOf = (s?: string) => ((s || "?").trim().replace(/^0x/, "")[0] || "?").toUpperCase();
+function timeAgoUnix(ts?: number | string) {
+  const n = typeof ts === "string" ? parseInt(ts) : (ts || 0);
+  if (!n) return "";
+  const sec = Math.floor(Date.now() / 1000) - n;
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+const _nameCache = new Map<string, string | null>();
+async function reverseName(addr: string): Promise<string | null> {
+  const key = addr.toLowerCase();
+  if (_nameCache.has(key)) return _nameCache.get(key)!;
+  try {
+    const r = await fetch(`${BACKEND_URL}/hub/name/reverse/${addr}`);
+    const d = r.ok ? await r.json() : null;
+    const n = d?.name || null;
+    _nameCache.set(key, n);
+    return n;
+  } catch { _nameCache.set(key, null); return null; }
+}
 
 // ============================================================================
 // ROOT
