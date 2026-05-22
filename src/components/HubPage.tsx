@@ -749,7 +749,8 @@ function SendZkMiniModal({ to, onClose, onSent }: { to: string; onClose: () => v
 // ============================================================================
 // GLOBAL POST DETAIL (right pane)
 // ============================================================================
-function PostDetail({ post, myAddress, onBack, onChange }: { post: any; myAddress: string; onBack: () => void; onChange: () => void }) {
+function PostDetail({ post: initialPost, myAddress, onBack, onChange }: { post: any; myAddress: string; onBack: () => void; onChange: () => void }) {
+  const [post, setPost] = useState<any>(initialPost);
   const postId = post.id ?? post.postId;
   const creator = post.creator || "";
   const creatorName = post.creatorName;
@@ -761,8 +762,35 @@ function PostDetail({ post, myAddress, onBack, onChange }: { post: any; myAddres
   const [hasLiked, setHasLiked] = useState(false);
   const [liking, setLiking] = useState(false);
   const [commentList, setCommentList] = useState<any[]>([]);
+  const [commentsLoaded, setCommentsLoaded] = useState(false);
+  const [showComments, setShowComments] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [posting, setPosting] = useState(false);
+
+  useEffect(() => { setPost(initialPost); }, [initialPost]);
+
+  const refreshPost = async () => {
+    try {
+      const d = await backendGet(`/hub/posts/${postId}`);
+      const p = d?.post || d;
+      if (p) setPost((prev: any) => ({ ...prev, ...p }));
+      if (Array.isArray(d?.comments)) {
+        const enr = await Promise.all(d.comments.map(async (c: any) => {
+          const addr = c.commenter || c.author;
+          const name = await reverseName(addr);
+          return { ...c, _name: name, _addr: addr };
+        }));
+        setCommentList(enr);
+        setCommentsLoaded(true);
+      }
+    } catch {}
+  };
+
+  const loadComments = async () => {
+    setShowComments(true);
+    if (commentsLoaded) return;
+    await refreshPost();
+  };
 
   useEffect(() => {
     (async () => {
@@ -771,25 +799,35 @@ function PostDetail({ post, myAddress, onBack, onChange }: { post: any; myAddres
         const c = new Contract(HUB_POSTS, POSTS_ABI, provider);
         setHasLiked(await c.hasLiked(postId, myAddress));
       } catch {}
-      try {
-        const d = await backendGet(`/hub/posts/${postId}/comments`).catch(() => null);
-        if (d && Array.isArray(d.comments)) setCommentList(d.comments);
-      } catch {}
     })();
   }, [postId, myAddress]);
 
   const like = async () => {
     if (hasLiked) return;
-    try { setLiking(true); await writeContract(HUB_POSTS, POSTS_ABI, "likePost", [postId]); setHasLiked(true); onChange(); }
-    catch (e: any) { showError(e?.shortMessage || e?.message || "Like failed"); }
+    try {
+      setLiking(true);
+      await writeContract(HUB_POSTS, POSTS_ABI, "likePost", [postId]);
+      setHasLiked(true);
+      await refreshPost();
+      onChange();
+    } catch (e: any) { showError(e?.shortMessage || e?.message || "Like failed"); }
     finally { setLiking(false); }
   };
   const comment = async () => {
     if (!commentText.trim()) return;
-    try { setPosting(true); await writeContract(HUB_POSTS, POSTS_ABI, "commentPost", [postId, commentText]); setCommentText(""); onChange(); }
-    catch (e: any) { showError(e?.shortMessage || e?.message || "Comment failed"); }
+    try {
+      setPosting(true);
+      await writeContract(HUB_POSTS, POSTS_ABI, "commentPost", [postId, commentText]);
+      setCommentText("");
+      setCommentsLoaded(false);
+      setShowComments(true);
+      await refreshPost();
+      onChange();
+    } catch (e: any) { showError(e?.shortMessage || e?.message || "Comment failed"); }
     finally { setPosting(false); }
   };
+
+  const commentCountNum = parseInt(comments) || 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -811,33 +849,47 @@ function PostDetail({ post, myAddress, onBack, onChange }: { post: any; myAddres
 
       <div className="flex-1 overflow-y-auto p-5">
         <p className="text-white/90 whitespace-pre-wrap text-base leading-relaxed mb-5">{content}</p>
-        <div className="flex gap-2 mb-6">
+        <div className="flex gap-2 mb-4">
           <button onClick={like} disabled={liking || hasLiked}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition ${hasLiked ? "bg-red-500/20 text-red-300 border-red-500/30" : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"} disabled:opacity-50`}>
-            <Heart size={14} fill={hasLiked ? "currentColor" : "none"} /> {likes}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition ${hasLiked ? "bg-white/5 text-white/40 border-white/10 cursor-not-allowed" : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"}`}>
+            <Heart size={14} fill={hasLiked ? "currentColor" : "none"} className={hasLiked ? "text-red-400" : ""} /> {likes}
           </button>
-          <div className="px-4 py-2 rounded-xl text-xs font-bold bg-white/5 border border-white/10 text-white/70 flex items-center gap-2">
+          <button onClick={() => document.getElementById(`cmt-input-${postId}`)?.focus()}
+            className="px-4 py-2 rounded-xl text-xs font-bold bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 flex items-center gap-2">
             <MessageCircle size={14} /> {comments}
-          </div>
+          </button>
         </div>
 
-        <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-2">Comments</div>
-        <div className="space-y-2 mb-4">
-          {commentList.length === 0 && <div className="text-xs text-white/30">No comments yet.</div>}
-          {commentList.map((c, i) => (
-            <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-3">
-              <div className="text-[11px] text-white/40 mb-1">{c.authorName ? `${c.authorName}.lit` : shortAddr(c.author)}</div>
-              <div className="text-sm text-white/90">{c.text || c.content}</div>
-            </div>
-          ))}
-        </div>
+        {commentCountNum > 0 && (
+          <button onClick={() => showComments ? setShowComments(false) : loadComments()}
+            className="text-[11px] text-emerald-300 hover:text-emerald-200 mb-3 font-semibold">
+            {showComments ? "Hide comments" : `View ${commentCountNum} comment${commentCountNum > 1 ? "s" : ""}`}
+          </button>
+        )}
+
+        {showComments && (
+          <div className="space-y-2 mb-4">
+            {commentList.length === 0 && <div className="text-xs text-white/30">No comments to show.</div>}
+            {commentList.map((c, i) => (
+              <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-3">
+                <div className="text-[11px] text-white/50 mb-1 flex items-center gap-2">
+                  <span className="font-semibold text-white/80">{c._name ? `${c._name}.lit` : shortAddr(c._addr)}</span>
+                  <span className="text-white/30">· {timeAgoUnix(c.createdAt)}</span>
+                </div>
+                <div className="text-sm text-white/90">{c.text || c.content}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="p-3 border-t border-white/10 flex gap-2 bg-black/40">
-        <input value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Write a comment..."
+        <input id={`cmt-input-${postId}`} value={commentText} onChange={(e) => setCommentText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && comment()}
+          placeholder="Write a comment..."
           className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-white/30" />
-        <button onClick={comment} disabled={posting || !commentText.trim()} className="px-4 rounded-xl bg-emerald-500 text-black text-xs font-bold disabled:opacity-40">
-          {posting ? <Loader2 className="animate-spin" size={14} /> : "Post"}
+        <button onClick={comment} disabled={posting || !commentText.trim()} className="px-4 rounded-xl bg-emerald-500 text-black text-xs font-bold disabled:opacity-40 flex items-center gap-1">
+          {posting ? <Loader2 className="animate-spin" size={14} /> : <><Send size={12} /> Send</>}
         </button>
       </div>
     </div>
