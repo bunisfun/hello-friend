@@ -50,6 +50,8 @@ const MESSENGER_ABI = [
   "function rejectFriendRequest(uint256 reqId)",
   "function sendMessage(address to, string contentHash, string msgType)",
   "function sendZkLTC(address to, string note) payable",
+  "function requestCount() view returns (uint256)",
+  "function friendRequests(uint256) view returns (address from, address to, uint8 status, uint256 sentAt)",
 ];
 const TRANSFER_ABI = [
   "function sendToName(string toLitName, string note) payable",
@@ -93,6 +95,27 @@ async function backendGet(path: string) {
 }
 const shortAddr = (a?: string) => (a ? `${a.slice(0, 6)}...${a.slice(-4)}` : "");
 const letterOf = (s?: string) => ((s || "?").trim().replace(/^0x/, "")[0] || "?").toUpperCase();
+function timeAgoUnix(ts?: number | string) {
+  const n = typeof ts === "string" ? parseInt(ts) : (ts || 0);
+  if (!n) return "";
+  const sec = Math.floor(Date.now() / 1000) - n;
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+const _nameCache = new Map<string, string | null>();
+async function reverseName(addr: string): Promise<string | null> {
+  const key = addr.toLowerCase();
+  if (_nameCache.has(key)) return _nameCache.get(key)!;
+  try {
+    const r = await fetch(`${BACKEND_URL}/hub/name/reverse/${addr}`);
+    const d = r.ok ? await r.json() : null;
+    const n = d?.name || null;
+    _nameCache.set(key, n);
+    return n;
+  } catch { _nameCache.set(key, null); return null; }
+}
 
 // ============================================================================
 // ROOT
@@ -215,7 +238,7 @@ function ChatShell({ myAddress, myName }: { myAddress: string; myName: string })
           <ListingDetail listing={activeListing} myAddress={myAddress} myName={myName} onBack={() => setActiveListing(null)} />
         )}
         {page === "market" && !activeListing && (
-          <ListYourName myName={myName} />
+          <ListYourName myName={myName} myAddress={myAddress} />
         )}
         {!activeFriend && !activePost && !activeListing && page === "messages" && (
           <EmptyRight icon={MessageCircle} title="Select a conversation" sub="Your messages are signed on-chain via LIT Messenger." />
@@ -320,6 +343,7 @@ function WalletFooter({ myName, myAddress, collapsed }: { myName: string | null;
 function MessagesMiddle({
   myAddress, chatTab, setChatTab, activeFriend, setActiveFriend, activePost, setActivePost,
 }: any) {
+  const [pendingCount, setPendingCount] = useState(0);
   return (
     <>
       {/* Header */}
@@ -339,22 +363,25 @@ function MessagesMiddle({
             { id: "global", label: "Global" },
           ].map((t) => (
             <button key={t.id} onClick={() => setChatTab(t.id)}
-              className={`flex-1 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition ${chatTab === t.id ? "bg-emerald-500 text-black" : "text-white/60 hover:text-white"}`}>
+              className={`relative flex-1 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition ${chatTab === t.id ? "bg-emerald-500 text-black" : "text-white/60 hover:text-white"}`}>
               {t.label}
+              {t.id === "private" && pendingCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center">{pendingCount}</span>
+              )}
             </button>
           ))}
         </div>
       </div>
 
       {chatTab === "private"
-        ? <PrivateList myAddress={myAddress} activeFriend={activeFriend} setActiveFriend={setActiveFriend} />
+        ? <PrivateList myAddress={myAddress} activeFriend={activeFriend} setActiveFriend={setActiveFriend} onPendingCount={setPendingCount} />
         : <GlobalList myAddress={myAddress} activePost={activePost} setActivePost={setActivePost} />}
     </>
   );
 }
 
 // -------- PRIVATE LIST --------
-function PrivateList({ myAddress, activeFriend, setActiveFriend }: any) {
+function PrivateList({ myAddress, activeFriend, setActiveFriend, onPendingCount }: any) {
   const [friends, setFriends] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -364,24 +391,44 @@ function PrivateList({ myAddress, activeFriend, setActiveFriend }: any) {
   const load = async () => {
     setLoading(true);
     try {
-      const [f, r] = await Promise.all([
-        backendGet(`/hub/messenger/friends/${myAddress}`).catch(() => ({ friends: [] })),
-        backendGet(`/hub/messenger/requests/${myAddress}`).catch(() => ({ requests: [] })),
-      ]);
+      // Friends from backend
+      const f = await backendGet(`/hub/messenger/friends/${myAddress}`).catch(() => ({ friends: [] }));
       const rawF = Array.isArray(f?.friends) ? f.friends : [];
-      const rawR = Array.isArray(r?.requests) ? r.requests : [];
-      const enrich = async (list: any[], aKey: string, nKey: string) =>
-        Promise.all(list.map(async (i) => {
-          if (i[nKey]) return i;
-          const addr = i[aKey] || i.address || i;
-          try { const d = await backendGet(`/hub/name/reverse/${addr}`); return { ...i, [nKey]: d?.name || null }; }
-          catch { return i; }
-        }));
-      const [fe, re] = await Promise.all([enrich(rawF, "address", "name"), enrich(rawR, "from", "fromName")]);
-      setFriends(fe); setRequests(re);
+      const fe = await Promise.all(rawF.map(async (i: any) => {
+        if (i.name) return i;
+        const addr = i.address || i;
+        const n = await reverseName(addr);
+        return typeof i === "object" ? { ...i, name: n } : { address: addr, name: n };
+      }));
+      setFriends(fe);
+
+      // Friend requests on-chain
+      const reqs: any[] = [];
+      try {
+        const provider = new BrowserProvider((window as any).ethereum);
+        const c = new Contract(LIT_MESSENGER, MESSENGER_ABI, provider);
+        const total = Number(await c.requestCount());
+        const me = myAddress.toLowerCase();
+        // Fetch all requests in parallel
+        const all = await Promise.all(
+          Array.from({ length: total }, (_, i) => c.friendRequests(i + 1).then((r: any) => ({ reqId: i + 1, from: r[0], to: r[1], status: Number(r[2]), sentAt: Number(r[3]) })).catch(() => null))
+        );
+        for (const r of all) {
+          if (r && r.to.toLowerCase() === me && r.status === 0) reqs.push(r);
+        }
+      } catch {}
+      // Enrich requests with name + post count
+      const allPosts = await backendGet("/hub/posts").then(d => d?.posts || []).catch(() => []);
+      const reqsEnriched = await Promise.all(reqs.map(async (r) => {
+        const name = await reverseName(r.from);
+        const postCount = allPosts.filter((p: any) => (p.creator || "").toLowerCase() === r.from.toLowerCase()).length;
+        return { ...r, fromName: name, postCount };
+      }));
+      setRequests(reqsEnriched);
+      onPendingCount?.(reqsEnriched.length);
     } finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, [myAddress]);
+  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [myAddress]);
 
   const visible = friends.filter((f) => {
     if (!search.trim()) return true;
@@ -458,7 +505,10 @@ function RequestRow({ req, onResolved }: { req: any; onResolved: () => void }) {
   };
   return (
     <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 flex items-center justify-between gap-2">
-      <div className="text-xs text-white truncate">{req.fromName ? `${req.fromName}.lit` : shortAddr(req.from)}</div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs text-white truncate font-semibold">{req.fromName ? `${req.fromName}.lit` : shortAddr(req.from)}</div>
+        <div className="text-[10px] text-white/40 truncate">{shortAddr(req.from)} · {req.postCount ?? 0} posts</div>
+      </div>
       <div className="flex gap-1 shrink-0">
         <button onClick={() => respond(true)} className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center justify-center"><Check size={12} /></button>
         <button onClick={() => respond(false)} className="w-7 h-7 rounded-lg bg-red-500/20 text-red-300 border border-red-500/30 flex items-center justify-center"><X size={12} /></button>
@@ -699,7 +749,8 @@ function SendZkMiniModal({ to, onClose, onSent }: { to: string; onClose: () => v
 // ============================================================================
 // GLOBAL POST DETAIL (right pane)
 // ============================================================================
-function PostDetail({ post, myAddress, onBack, onChange }: { post: any; myAddress: string; onBack: () => void; onChange: () => void }) {
+function PostDetail({ post: initialPost, myAddress, onBack, onChange }: { post: any; myAddress: string; onBack: () => void; onChange: () => void }) {
+  const [post, setPost] = useState<any>(initialPost);
   const postId = post.id ?? post.postId;
   const creator = post.creator || "";
   const creatorName = post.creatorName;
@@ -711,8 +762,35 @@ function PostDetail({ post, myAddress, onBack, onChange }: { post: any; myAddres
   const [hasLiked, setHasLiked] = useState(false);
   const [liking, setLiking] = useState(false);
   const [commentList, setCommentList] = useState<any[]>([]);
+  const [commentsLoaded, setCommentsLoaded] = useState(false);
+  const [showComments, setShowComments] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [posting, setPosting] = useState(false);
+
+  useEffect(() => { setPost(initialPost); }, [initialPost]);
+
+  const refreshPost = async () => {
+    try {
+      const d = await backendGet(`/hub/posts/${postId}`);
+      const p = d?.post || d;
+      if (p) setPost((prev: any) => ({ ...prev, ...p }));
+      if (Array.isArray(d?.comments)) {
+        const enr = await Promise.all(d.comments.map(async (c: any) => {
+          const addr = c.commenter || c.author;
+          const name = await reverseName(addr);
+          return { ...c, _name: name, _addr: addr };
+        }));
+        setCommentList(enr);
+        setCommentsLoaded(true);
+      }
+    } catch {}
+  };
+
+  const loadComments = async () => {
+    setShowComments(true);
+    if (commentsLoaded) return;
+    await refreshPost();
+  };
 
   useEffect(() => {
     (async () => {
@@ -721,25 +799,35 @@ function PostDetail({ post, myAddress, onBack, onChange }: { post: any; myAddres
         const c = new Contract(HUB_POSTS, POSTS_ABI, provider);
         setHasLiked(await c.hasLiked(postId, myAddress));
       } catch {}
-      try {
-        const d = await backendGet(`/hub/posts/${postId}/comments`).catch(() => null);
-        if (d && Array.isArray(d.comments)) setCommentList(d.comments);
-      } catch {}
     })();
   }, [postId, myAddress]);
 
   const like = async () => {
     if (hasLiked) return;
-    try { setLiking(true); await writeContract(HUB_POSTS, POSTS_ABI, "likePost", [postId]); setHasLiked(true); onChange(); }
-    catch (e: any) { showError(e?.shortMessage || e?.message || "Like failed"); }
+    try {
+      setLiking(true);
+      await writeContract(HUB_POSTS, POSTS_ABI, "likePost", [postId]);
+      setHasLiked(true);
+      await refreshPost();
+      onChange();
+    } catch (e: any) { showError(e?.shortMessage || e?.message || "Like failed"); }
     finally { setLiking(false); }
   };
   const comment = async () => {
     if (!commentText.trim()) return;
-    try { setPosting(true); await writeContract(HUB_POSTS, POSTS_ABI, "commentPost", [postId, commentText]); setCommentText(""); onChange(); }
-    catch (e: any) { showError(e?.shortMessage || e?.message || "Comment failed"); }
+    try {
+      setPosting(true);
+      await writeContract(HUB_POSTS, POSTS_ABI, "commentPost", [postId, commentText]);
+      setCommentText("");
+      setCommentsLoaded(false);
+      setShowComments(true);
+      await refreshPost();
+      onChange();
+    } catch (e: any) { showError(e?.shortMessage || e?.message || "Comment failed"); }
     finally { setPosting(false); }
   };
+
+  const commentCountNum = parseInt(comments) || 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -761,33 +849,47 @@ function PostDetail({ post, myAddress, onBack, onChange }: { post: any; myAddres
 
       <div className="flex-1 overflow-y-auto p-5">
         <p className="text-white/90 whitespace-pre-wrap text-base leading-relaxed mb-5">{content}</p>
-        <div className="flex gap-2 mb-6">
+        <div className="flex gap-2 mb-4">
           <button onClick={like} disabled={liking || hasLiked}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition ${hasLiked ? "bg-red-500/20 text-red-300 border-red-500/30" : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"} disabled:opacity-50`}>
-            <Heart size={14} fill={hasLiked ? "currentColor" : "none"} /> {likes}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border transition ${hasLiked ? "bg-white/5 text-white/40 border-white/10 cursor-not-allowed" : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"}`}>
+            <Heart size={14} fill={hasLiked ? "currentColor" : "none"} className={hasLiked ? "text-red-400" : ""} /> {likes}
           </button>
-          <div className="px-4 py-2 rounded-xl text-xs font-bold bg-white/5 border border-white/10 text-white/70 flex items-center gap-2">
+          <button onClick={() => document.getElementById(`cmt-input-${postId}`)?.focus()}
+            className="px-4 py-2 rounded-xl text-xs font-bold bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 flex items-center gap-2">
             <MessageCircle size={14} /> {comments}
-          </div>
+          </button>
         </div>
 
-        <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-2">Comments</div>
-        <div className="space-y-2 mb-4">
-          {commentList.length === 0 && <div className="text-xs text-white/30">No comments yet.</div>}
-          {commentList.map((c, i) => (
-            <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-3">
-              <div className="text-[11px] text-white/40 mb-1">{c.authorName ? `${c.authorName}.lit` : shortAddr(c.author)}</div>
-              <div className="text-sm text-white/90">{c.text || c.content}</div>
-            </div>
-          ))}
-        </div>
+        {commentCountNum > 0 && (
+          <button onClick={() => showComments ? setShowComments(false) : loadComments()}
+            className="text-[11px] text-emerald-300 hover:text-emerald-200 mb-3 font-semibold">
+            {showComments ? "Hide comments" : `View ${commentCountNum} comment${commentCountNum > 1 ? "s" : ""}`}
+          </button>
+        )}
+
+        {showComments && (
+          <div className="space-y-2 mb-4">
+            {commentList.length === 0 && <div className="text-xs text-white/30">No comments to show.</div>}
+            {commentList.map((c, i) => (
+              <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-3">
+                <div className="text-[11px] text-white/50 mb-1 flex items-center gap-2">
+                  <span className="font-semibold text-white/80">{c._name ? `${c._name}.lit` : shortAddr(c._addr)}</span>
+                  <span className="text-white/30">· {timeAgoUnix(c.createdAt)}</span>
+                </div>
+                <div className="text-sm text-white/90">{c.text || c.content}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="p-3 border-t border-white/10 flex gap-2 bg-black/40">
-        <input value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Write a comment..."
+        <input id={`cmt-input-${postId}`} value={commentText} onChange={(e) => setCommentText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && comment()}
+          placeholder="Write a comment..."
           className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-white/30" />
-        <button onClick={comment} disabled={posting || !commentText.trim()} className="px-4 rounded-xl bg-emerald-500 text-black text-xs font-bold disabled:opacity-40">
-          {posting ? <Loader2 className="animate-spin" size={14} /> : "Post"}
+        <button onClick={comment} disabled={posting || !commentText.trim()} className="px-4 rounded-xl bg-emerald-500 text-black text-xs font-bold disabled:opacity-40 flex items-center gap-1">
+          {posting ? <Loader2 className="animate-spin" size={14} /> : <><Send size={12} /> Send</>}
         </button>
       </div>
     </div>
@@ -966,37 +1068,136 @@ function ListingDetail({ listing, myAddress, myName, onBack }: { listing: any; m
   );
 }
 
-function ListYourName({ myName }: { myName: string }) {
+function ListYourName({ myName, myAddress }: { myName: string; myAddress: string }) {
+  const [owned, setOwned] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<string>("");
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
-  const listMine = async () => {
-    if (!myName || !price) return;
+  const [listingInfo, setListingInfo] = useState<any | null>(null);
+  const [checkingListing, setCheckingListing] = useState(false);
+
+  const loadOwned = async () => {
+    setLoading(true);
+    try {
+      const d = await backendGet(`/hub/names/owned/${myAddress}`);
+      const list = Array.isArray(d?.names) ? d.names : [];
+      setOwned(list);
+      if (!selected && list[0]?.name) setSelected(list[0].name);
+    } catch { setOwned([]); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { loadOwned(); }, [myAddress]);
+
+  const checkListing = async (name: string) => {
+    if (!name) { setListingInfo(null); return; }
+    setCheckingListing(true);
+    try {
+      const d = await backendGet(`/hub/marketplace/listing/${name}`).catch(() => null);
+      setListingInfo(d?.listing || d || null);
+    } catch { setListingInfo(null); }
+    finally { setCheckingListing(false); }
+  };
+  useEffect(() => { checkListing(selected); }, [selected]);
+
+  const isPermanent = (e: any) => {
+    try { return BigInt(String(e ?? "0")) > BigInt("1000000000000000000"); } catch { return false; }
+  };
+  const expiryLabel = (e: any) => {
+    if (isPermanent(e)) return "Permanent";
+    const n = Number(e || 0);
+    if (!n) return "—";
+    return new Date(n * 1000).toLocaleDateString();
+  };
+
+  const unlist = async () => {
+    if (!selected) return;
     try {
       setBusy(true);
-      showInfo?.("Approving marketplace...");
+      showInfo?.("Unlisting...");
+      await writeContract(LIT_MARKETPLACE, MARKETPLACE_ABI, "unlistName", [selected]);
+      showSuccess({ title: "Unlisted!", rows: [{ label: "Name", value: `${selected}.lit` }] });
+      setTimeout(() => checkListing(selected), 1500);
+    } catch (e: any) { showError(e?.shortMessage || e?.message || "Unlist failed"); }
+    finally { setBusy(false); }
+  };
+
+  const listMine = async () => {
+    if (!selected || !price) return;
+    try {
+      setBusy(true);
+      showInfo?.("Step 1/2: Approving marketplace...");
       await writeContract(LIT_NAME_REGISTRY, REGISTRY_ABI, "setOperatorApproval", [LIT_MARKETPLACE, true]);
-      await writeContract(LIT_MARKETPLACE, MARKETPLACE_ABI, "listName", [myName, parseEther(price)]);
-      showSuccess({ title: "Listed!", rows: [{ label: "Name", value: `${myName}.lit` }, { label: "Price", value: `${price} zkLTC` }] });
+      showInfo?.("Step 2/2: Listing name...");
+      await writeContract(LIT_MARKETPLACE, MARKETPLACE_ABI, "listName", [selected, parseEther(price)]);
+      showSuccess({ title: `${selected}.lit listed for ${price} zkLTC!`, rows: [{ label: "Name", value: `${selected}.lit` }, { label: "Price", value: `${price} zkLTC` }] });
       setPrice("");
+      setTimeout(() => checkListing(selected), 1500);
     } catch (e: any) { showError(e?.shortMessage || e?.message || "List failed"); }
     finally { setBusy(false); }
   };
+
+  const isListed = !!listingInfo?.active;
+  const listedPrice = listingInfo?.price ? String(listingInfo.price) : "";
+
   return (
     <div className="flex flex-col h-full">
       <div className="h-16 px-4 border-b border-white/10 flex items-center bg-black/40 backdrop-blur-xl">
         <Store size={20} className="text-emerald-300 mr-2" />
         <div className="text-sm font-bold">.lit Market</div>
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center px-6">
+      <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col items-center">
+        {/* My Names */}
+        <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-3xl p-5 mb-4">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-3">My Names ({owned.length})</div>
+          {loading ? (
+            <div className="flex justify-center py-4"><Loader2 className="animate-spin text-white/40" size={18} /></div>
+          ) : owned.length === 0 ? (
+            <div className="text-xs text-white/40">No names owned yet.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {owned.map((n) => (
+                <div key={n.name} className="flex items-center justify-between bg-white/5 border border-white/10 rounded-xl px-3 py-2">
+                  <div className="text-sm font-bold">{n.name}.lit</div>
+                  <div className="text-[10px] text-white/50">{expiryLabel(n.expiresAt)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* List for Sale */}
         <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-3xl p-6">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-2">List Your Name</div>
-          <div className="text-2xl font-black mb-4">{myName}.lit</div>
-          <input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price (zkLTC)"
-            className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm outline-none mb-4" />
-          <button onClick={listMine} disabled={busy || !price}
-            className="w-full py-3 rounded-2xl bg-emerald-500 text-black font-black uppercase tracking-[0.2em] text-sm disabled:opacity-40 flex items-center justify-center gap-2">
-            {busy && <Loader2 className="animate-spin" size={14} />} <Tag size={14} /> List for Sale
-          </button>
+          <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-3">List a Name for Sale</div>
+          <select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={!owned.length}
+            className="w-full bg-zinc-900 border border-white/10 rounded-2xl px-4 py-3 text-sm outline-none mb-4 text-white">
+            {!owned.length && <option value="">No names owned</option>}
+            {owned.map((n) => <option key={n.name} value={n.name}>{n.name}.lit</option>)}
+          </select>
+
+          {checkingListing && <div className="text-[11px] text-white/40 mb-2">Checking listing status...</div>}
+
+          {isListed ? (
+            <>
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-4 py-3 mb-3">
+                <div className="text-[10px] uppercase tracking-wider text-emerald-300 mb-0.5">Currently Listed</div>
+                <div className="text-lg font-black text-emerald-300">{listedPrice} zkLTC</div>
+              </div>
+              <button onClick={unlist} disabled={busy}
+                className="w-full py-3 rounded-2xl bg-red-500/20 text-red-300 border border-red-500/30 font-black uppercase tracking-[0.2em] text-sm disabled:opacity-40 flex items-center justify-center gap-2">
+                {busy && <Loader2 className="animate-spin" size={14} />} Unlist
+              </button>
+            </>
+          ) : (
+            <>
+              <input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price (zkLTC)"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm outline-none mb-4" />
+              <button onClick={listMine} disabled={busy || !price || !selected}
+                className="w-full py-3 rounded-2xl bg-emerald-500 text-black font-black uppercase tracking-[0.2em] text-sm disabled:opacity-40 flex items-center justify-center gap-2">
+                {busy && <Loader2 className="animate-spin" size={14} />} <Tag size={14} /> List for Sale
+              </button>
+            </>
+          )}
         </div>
         <p className="text-xs text-white/30 mt-4">Select a listing from the left to view details</p>
       </div>
