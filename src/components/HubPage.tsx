@@ -85,11 +85,7 @@ async function getSigner() {
 async function writeContract(addr: string, abi: any, fn: string, args: any[], value?: bigint) {
   const signer = await getSigner();
   const c = new Contract(addr, abi, signer);
-  const addrFrom = await signer.getAddress();
-  const nonce = await signer.provider!.getTransactionCount(addrFrom, "latest");
-  const overrides: any = { nonce };
-  if (value) overrides.value = value;
-  const tx = await c[fn](...args, overrides);
+  const tx = await c[fn](...args, value ? { value } : {});
   return tx.wait();
 }
 async function backendGet(path: string) {
@@ -1252,8 +1248,7 @@ function RegisterNameModal({ onRegistered }: { onRegistered: (n: string) => void
       const signer = await provider.getSigner();
       const registry = new ethers.Contract(LIT_NAME_REGISTRY, REGISTRY_ABI, signer);
       const price = await registry.getPrice(duration);
-      const nonce = await provider.getTransactionCount(await signer.getAddress(), "latest");
-      const tx = await registry.register(name, duration, { value: price, nonce });
+      const tx = await registry.register(name, duration, { value: price });
       await tx.wait();
       showSuccess({ title: `✓ ${name}.lit registered!`, rows: [{ label: "Name", value: `${name}.lit` }, { label: "Duration", value: selected.label }] });
       onRegistered(name);
