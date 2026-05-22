@@ -110,7 +110,6 @@ export default function HubPage() {
   const [myName, setMyName] = useState<string | null>(null);
   const [checkingName, setCheckingName] = useState(true);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [tab, setTab] = useState<"global" | "private" | "market">("global");
   const [showSendModal, setShowSendModal] = useState(false);
 
   // Check if user has a .lit name
