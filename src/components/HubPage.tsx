@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Globe, Users, Store, Send, Heart, MessageCircle, Share2, Plus,
   Sparkles, X, Check, ArrowRight, Loader2, Wallet, Tag,
+  Search, Settings, SquarePen, ListFilter, Menu, ArrowLeft,
 } from "lucide-react";
 import { showSuccess, showError, showInfo } from "@/lib/feedback";
 
