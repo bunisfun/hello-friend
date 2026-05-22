@@ -1068,37 +1068,136 @@ function ListingDetail({ listing, myAddress, myName, onBack }: { listing: any; m
   );
 }
 
-function ListYourName({ myName }: { myName: string }) {
+function ListYourName({ myName, myAddress }: { myName: string; myAddress: string }) {
+  const [owned, setOwned] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<string>("");
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
-  const listMine = async () => {
-    if (!myName || !price) return;
+  const [listingInfo, setListingInfo] = useState<any | null>(null);
+  const [checkingListing, setCheckingListing] = useState(false);
+
+  const loadOwned = async () => {
+    setLoading(true);
+    try {
+      const d = await backendGet(`/hub/names/owned/${myAddress}`);
+      const list = Array.isArray(d?.names) ? d.names : [];
+      setOwned(list);
+      if (!selected && list[0]?.name) setSelected(list[0].name);
+    } catch { setOwned([]); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { loadOwned(); }, [myAddress]);
+
+  const checkListing = async (name: string) => {
+    if (!name) { setListingInfo(null); return; }
+    setCheckingListing(true);
+    try {
+      const d = await backendGet(`/hub/marketplace/listing/${name}`).catch(() => null);
+      setListingInfo(d?.listing || d || null);
+    } catch { setListingInfo(null); }
+    finally { setCheckingListing(false); }
+  };
+  useEffect(() => { checkListing(selected); }, [selected]);
+
+  const isPermanent = (e: any) => {
+    try { return BigInt(String(e ?? "0")) > BigInt("1000000000000000000"); } catch { return false; }
+  };
+  const expiryLabel = (e: any) => {
+    if (isPermanent(e)) return "Permanent";
+    const n = Number(e || 0);
+    if (!n) return "—";
+    return new Date(n * 1000).toLocaleDateString();
+  };
+
+  const unlist = async () => {
+    if (!selected) return;
     try {
       setBusy(true);
-      showInfo?.("Approving marketplace...");
+      showInfo?.("Unlisting...");
+      await writeContract(LIT_MARKETPLACE, MARKETPLACE_ABI, "unlistName", [selected]);
+      showSuccess({ title: "Unlisted!", rows: [{ label: "Name", value: `${selected}.lit` }] });
+      setTimeout(() => checkListing(selected), 1500);
+    } catch (e: any) { showError(e?.shortMessage || e?.message || "Unlist failed"); }
+    finally { setBusy(false); }
+  };
+
+  const listMine = async () => {
+    if (!selected || !price) return;
+    try {
+      setBusy(true);
+      showInfo?.("Step 1/2: Approving marketplace...");
       await writeContract(LIT_NAME_REGISTRY, REGISTRY_ABI, "setOperatorApproval", [LIT_MARKETPLACE, true]);
-      await writeContract(LIT_MARKETPLACE, MARKETPLACE_ABI, "listName", [myName, parseEther(price)]);
-      showSuccess({ title: "Listed!", rows: [{ label: "Name", value: `${myName}.lit` }, { label: "Price", value: `${price} zkLTC` }] });
+      showInfo?.("Step 2/2: Listing name...");
+      await writeContract(LIT_MARKETPLACE, MARKETPLACE_ABI, "listName", [selected, parseEther(price)]);
+      showSuccess({ title: `${selected}.lit listed for ${price} zkLTC!`, rows: [{ label: "Name", value: `${selected}.lit` }, { label: "Price", value: `${price} zkLTC` }] });
       setPrice("");
+      setTimeout(() => checkListing(selected), 1500);
     } catch (e: any) { showError(e?.shortMessage || e?.message || "List failed"); }
     finally { setBusy(false); }
   };
+
+  const isListed = !!listingInfo?.active;
+  const listedPrice = listingInfo?.price ? String(listingInfo.price) : "";
+
   return (
     <div className="flex flex-col h-full">
       <div className="h-16 px-4 border-b border-white/10 flex items-center bg-black/40 backdrop-blur-xl">
         <Store size={20} className="text-emerald-300 mr-2" />
         <div className="text-sm font-bold">.lit Market</div>
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center px-6">
+      <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col items-center">
+        {/* My Names */}
+        <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-3xl p-5 mb-4">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-3">My Names ({owned.length})</div>
+          {loading ? (
+            <div className="flex justify-center py-4"><Loader2 className="animate-spin text-white/40" size={18} /></div>
+          ) : owned.length === 0 ? (
+            <div className="text-xs text-white/40">No names owned yet.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {owned.map((n) => (
+                <div key={n.name} className="flex items-center justify-between bg-white/5 border border-white/10 rounded-xl px-3 py-2">
+                  <div className="text-sm font-bold">{n.name}.lit</div>
+                  <div className="text-[10px] text-white/50">{expiryLabel(n.expiresAt)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* List for Sale */}
         <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-3xl p-6">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-2">List Your Name</div>
-          <div className="text-2xl font-black mb-4">{myName}.lit</div>
-          <input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price (zkLTC)"
-            className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm outline-none mb-4" />
-          <button onClick={listMine} disabled={busy || !price}
-            className="w-full py-3 rounded-2xl bg-emerald-500 text-black font-black uppercase tracking-[0.2em] text-sm disabled:opacity-40 flex items-center justify-center gap-2">
-            {busy && <Loader2 className="animate-spin" size={14} />} <Tag size={14} /> List for Sale
-          </button>
+          <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-3">List a Name for Sale</div>
+          <select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={!owned.length}
+            className="w-full bg-zinc-900 border border-white/10 rounded-2xl px-4 py-3 text-sm outline-none mb-4 text-white">
+            {!owned.length && <option value="">No names owned</option>}
+            {owned.map((n) => <option key={n.name} value={n.name}>{n.name}.lit</option>)}
+          </select>
+
+          {checkingListing && <div className="text-[11px] text-white/40 mb-2">Checking listing status...</div>}
+
+          {isListed ? (
+            <>
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-4 py-3 mb-3">
+                <div className="text-[10px] uppercase tracking-wider text-emerald-300 mb-0.5">Currently Listed</div>
+                <div className="text-lg font-black text-emerald-300">{listedPrice} zkLTC</div>
+              </div>
+              <button onClick={unlist} disabled={busy}
+                className="w-full py-3 rounded-2xl bg-red-500/20 text-red-300 border border-red-500/30 font-black uppercase tracking-[0.2em] text-sm disabled:opacity-40 flex items-center justify-center gap-2">
+                {busy && <Loader2 className="animate-spin" size={14} />} Unlist
+              </button>
+            </>
+          ) : (
+            <>
+              <input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price (zkLTC)"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm outline-none mb-4" />
+              <button onClick={listMine} disabled={busy || !price || !selected}
+                className="w-full py-3 rounded-2xl bg-emerald-500 text-black font-black uppercase tracking-[0.2em] text-sm disabled:opacity-40 flex items-center justify-center gap-2">
+                {busy && <Loader2 className="animate-spin" size={14} />} <Tag size={14} /> List for Sale
+              </button>
+            </>
+          )}
         </div>
         <p className="text-xs text-white/30 mt-4">Select a listing from the left to view details</p>
       </div>
