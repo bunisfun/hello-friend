@@ -1604,7 +1604,7 @@
     btn.style.opacity = '0.5';
     btn.style.pointerEvents = 'none';
 
-    const ok = await LitDeX.startSession('ts-start');
+    const ok = await LitDeX.startSession();
     if (ok) {
       startGame();
     } else {
@@ -1626,7 +1626,7 @@
     // Refresh stats before new game
     await LitDeX.loadStats();
 
-    const ok = await LitDeX.startSession('ts-restart');
+    const ok = await LitDeX.startSession();
     if (ok) {
       goScreen.classList.add('hidden');
       startGame();
