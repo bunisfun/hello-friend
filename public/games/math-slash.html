@@ -1994,16 +1994,20 @@ const LitDeX = (() => {
     const errId = document.getElementById('gameover-screen').classList.contains('hidden')
       ? 'start-error' : 'go-error';
     const widgetEl = widgetId ? document.getElementById(widgetId) : null;
-    let turnstileToken = '';
-    try {
-      if (window.turnstile && widgetEl) {
-        turnstileToken = window.turnstile.getResponse(widgetEl) || '';
-      } else if (window.turnstile) {
-        turnstileToken = window.turnstile.getResponse() || '';
-      }
-    } catch (_) {}
+    // Prefer the token captured via Turnstile's callback; fall back to getResponse
+    let turnstileToken = (widgetId && window.__msTurnstileTokens && window.__msTurnstileTokens[widgetId]) || '';
     if (!turnstileToken) {
-      showErr(errId, '⚠ Please complete the security check');
+      try {
+        if (window.turnstile && widgetEl) {
+          turnstileToken = window.turnstile.getResponse('#' + widgetId) || '';
+        } else if (window.turnstile) {
+          turnstileToken = window.turnstile.getResponse() || '';
+        }
+      } catch (_) {}
+    }
+    if (!turnstileToken) {
+      showErr(errId, '⚠ Please complete the security check first');
+      try { window.__msResetTurnstile && window.__msResetTurnstile(widgetId); } catch (_) {}
       return false;
     }
     try {
@@ -2016,7 +2020,7 @@ const LitDeX = (() => {
 
       if (!r.ok) {
         showErr(errId, '⚠ ' + (data.error || 'Could not start game'));
-        try { window.turnstile && window.turnstile.reset(widgetEl || undefined); } catch (_) {}
+        try { window.__msResetTurnstile && window.__msResetTurnstile(widgetId); } catch (_) {}
         return false;
       }
 
@@ -2038,7 +2042,7 @@ const LitDeX = (() => {
 
     } catch (err) {
       showErr(errId, '⚠ Network error. Check your connection.');
-      try { window.turnstile && window.turnstile.reset(widgetEl || undefined); } catch (_) {}
+      try { window.__msResetTurnstile && window.__msResetTurnstile(widgetId); } catch (_) {}
       return false;
     }
   }
