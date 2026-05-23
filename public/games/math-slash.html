@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Math Slash — 3D</title>
+<script src="https://challenges.cloudflare.com/turnstile/v1/api.js" async defer></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bangers&family=Fredoka+One&family=Permanent+Marker&display=swap');
 
@@ -659,6 +660,7 @@
         </div>
       </div>
 
+      <div class="cf-turnstile" id="ts-start" data-sitekey="0x4AAAAAADS4Y3ec8QgtPM8h" data-theme="dark" style="margin:0 auto 14px;display:flex;justify-content:center;"></div>
       <button class="start-btn" id="start-btn" style="opacity:0.5;pointer-events:none;">LOADING…</button>
       <div id="nft-hint" style="display:none;font-family:'Fredoka One',cursive;color:rgba(255,255,255,0.55);margin-top:12px;font-size:13px;text-align:center;max-width:340px;">Hold an NFT for free games & bonuses</div>
       <div id="start-error" style="font-family:'Fredoka One',cursive;color:#ffffff;margin-top:14px;font-size:14px;text-align:center;max-width:340px;display:none;"></div>
@@ -672,6 +674,7 @@
       <div class="go-stats" id="go-level">Reached Level 1</div>
       <div class="go-best" id="go-best">Best: 0</div>
 
+      <div class="cf-turnstile" id="ts-restart" data-sitekey="0x4AAAAAADS4Y3ec8QgtPM8h" data-theme="dark" style="margin:0 auto 14px;display:flex;justify-content:center;"></div>
       <button class="start-btn" id="restart-btn">PLAY AGAIN</button>
       <button class="start-btn" id="exit-btn" style="margin-top:12px;background:rgba(255,255,255,0.08);">EXIT</button>
       <div id="go-error" style="font-family:'Fredoka One',cursive;color:#ffffff;margin-top:12px;font-size:13px;text-align:center;max-width:340px;display:none;"></div>
@@ -1509,6 +1512,15 @@
       window.parent && window.parent.postMessage(payload, '*');
       window.parent && window.parent.postMessage({ ...payload, type: 'litdex:mathslash:end' }, '*');
     } catch (_) {}
+    // Reset Turnstile widgets so the player must re-verify before next game
+    try {
+      if (window.turnstile) {
+        const tsStart = document.getElementById('ts-start');
+        const tsRestart = document.getElementById('ts-restart');
+        if (tsStart) window.turnstile.reset(tsStart);
+        if (tsRestart) window.turnstile.reset(tsRestart);
+      }
+    } catch (_) {}
     // Note: do NOT call LitDeX.endSession here — the React parent calls /simple/end.
   }
 
@@ -1566,7 +1578,7 @@
     btn.style.opacity = '0.5';
     btn.style.pointerEvents = 'none';
 
-    const ok = await LitDeX.startSession();
+    const ok = await LitDeX.startSession('ts-start');
     if (ok) {
       startGame();
     } else {
@@ -1588,7 +1600,7 @@
     // Refresh stats before new game
     await LitDeX.loadStats();
 
-    const ok = await LitDeX.startSession();
+    const ok = await LitDeX.startSession('ts-restart');
     if (ok) {
       goScreen.classList.add('hidden');
       startGame();
@@ -1925,22 +1937,36 @@ const LitDeX = (() => {
   }
 
   // ── Start session (deduct points, get sessionId) ──────────────────────
-  async function startSession() {
+  async function startSession(widgetId) {
     if (!walletAddress) return false;
     hideErr('start-error');
     hideErr('go-error');
+    const errId = document.getElementById('gameover-screen').classList.contains('hidden')
+      ? 'start-error' : 'go-error';
+    const widgetEl = widgetId ? document.getElementById(widgetId) : null;
+    let turnstileToken = '';
+    try {
+      if (window.turnstile && widgetEl) {
+        turnstileToken = window.turnstile.getResponse(widgetEl) || '';
+      } else if (window.turnstile) {
+        turnstileToken = window.turnstile.getResponse() || '';
+      }
+    } catch (_) {}
+    if (!turnstileToken) {
+      showErr(errId, '⚠ Please complete the security check');
+      return false;
+    }
     try {
       const r = await fetch(`${API}/simple/start`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ wallet: walletAddress }),
+        body:    JSON.stringify({ wallet: walletAddress, turnstileToken }),
       });
       const data = await r.json();
 
       if (!r.ok) {
-        const errId = document.getElementById('gameover-screen').classList.contains('hidden')
-          ? 'start-error' : 'go-error';
         showErr(errId, '⚠ ' + (data.error || 'Could not start game'));
+        try { window.turnstile && window.turnstile.reset(widgetEl || undefined); } catch (_) {}
         return false;
       }
 
@@ -1961,12 +1987,12 @@ const LitDeX = (() => {
       return true;
 
     } catch (err) {
-      const errId = document.getElementById('gameover-screen').classList.contains('hidden')
-        ? 'start-error' : 'go-error';
       showErr(errId, '⚠ Network error. Check your connection.');
+      try { window.turnstile && window.turnstile.reset(widgetEl || undefined); } catch (_) {}
       return false;
     }
   }
+
 
   // ── End session (legacy fallback; React parent handles score submission) ─────────────────────────
   async function endSession(score) {
