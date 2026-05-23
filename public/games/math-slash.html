@@ -1569,7 +1569,7 @@
     btn.style.opacity = '0.5';
     btn.style.pointerEvents = 'none';
 
-    const ok = await LitDeX.startSession();
+    const ok = await LitDeX.startSession('ts-start');
     if (ok) {
       startGame();
     } else {
@@ -1591,7 +1591,7 @@
     // Refresh stats before new game
     await LitDeX.loadStats();
 
-    const ok = await LitDeX.startSession();
+    const ok = await LitDeX.startSession('ts-restart');
     if (ok) {
       goScreen.classList.add('hidden');
       startGame();
@@ -1928,22 +1928,36 @@ const LitDeX = (() => {
   }
 
   // ── Start session (deduct points, get sessionId) ──────────────────────
-  async function startSession() {
+  async function startSession(widgetId) {
     if (!walletAddress) return false;
     hideErr('start-error');
     hideErr('go-error');
+    const errId = document.getElementById('gameover-screen').classList.contains('hidden')
+      ? 'start-error' : 'go-error';
+    const widgetEl = widgetId ? document.getElementById(widgetId) : null;
+    let turnstileToken = '';
+    try {
+      if (window.turnstile && widgetEl) {
+        turnstileToken = window.turnstile.getResponse(widgetEl) || '';
+      } else if (window.turnstile) {
+        turnstileToken = window.turnstile.getResponse() || '';
+      }
+    } catch (_) {}
+    if (!turnstileToken) {
+      showErr(errId, '⚠ Please complete the security check');
+      return false;
+    }
     try {
       const r = await fetch(`${API}/simple/start`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ wallet: walletAddress }),
+        body:    JSON.stringify({ wallet: walletAddress, turnstileToken }),
       });
       const data = await r.json();
 
       if (!r.ok) {
-        const errId = document.getElementById('gameover-screen').classList.contains('hidden')
-          ? 'start-error' : 'go-error';
         showErr(errId, '⚠ ' + (data.error || 'Could not start game'));
+        try { window.turnstile && window.turnstile.reset(widgetEl || undefined); } catch (_) {}
         return false;
       }
 
@@ -1964,12 +1978,12 @@ const LitDeX = (() => {
       return true;
 
     } catch (err) {
-      const errId = document.getElementById('gameover-screen').classList.contains('hidden')
-        ? 'start-error' : 'go-error';
       showErr(errId, '⚠ Network error. Check your connection.');
+      try { window.turnstile && window.turnstile.reset(widgetEl || undefined); } catch (_) {}
       return false;
     }
   }
+
 
   // ── End session (legacy fallback; React parent handles score submission) ─────────────────────────
   async function endSession(score) {
