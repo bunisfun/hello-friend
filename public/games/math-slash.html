@@ -1963,27 +1963,21 @@ const LitDeX = (() => {
   }
 
   // ── Start session (deduct points, get sessionId) ──────────────────────
-  async function startSession(widgetId) {
+  async function startSession() {
     if (!walletAddress) return false;
     hideErr('start-error');
     hideErr('go-error');
     const errId = document.getElementById('gameover-screen').classList.contains('hidden')
       ? 'start-error' : 'go-error';
-    const widgetEl = widgetId ? document.getElementById(widgetId) : null;
-    // Prefer the token captured via Turnstile's callback; fall back to getResponse
-    let turnstileToken = (widgetId && window.__msTurnstileTokens && window.__msTurnstileTokens[widgetId]) || '';
+    let turnstileToken = window.__msToken || '';
     if (!turnstileToken) {
       try {
-        if (window.turnstile && widgetEl) {
-          turnstileToken = window.turnstile.getResponse('#' + widgetId) || '';
-        } else if (window.turnstile) {
-          turnstileToken = window.turnstile.getResponse() || '';
-        }
+        if (window.turnstile) turnstileToken = window.turnstile.getResponse('#cf-ts-ms') || '';
       } catch (_) {}
     }
     if (!turnstileToken) {
       showErr(errId, '⚠ Please complete the security check first');
-      try { window.__msResetTurnstile && window.__msResetTurnstile(widgetId); } catch (_) {}
+      try { window.turnstile && window.turnstile.reset('#cf-ts-ms'); } catch (_) {}
       return false;
     }
     try {
@@ -1996,7 +1990,7 @@ const LitDeX = (() => {
 
       if (!r.ok) {
         showErr(errId, '⚠ ' + (data.error || 'Could not start game'));
-        try { window.__msResetTurnstile && window.__msResetTurnstile(widgetId); } catch (_) {}
+        try { window.__msToken = ''; window.turnstile && window.turnstile.reset('#cf-ts-ms'); } catch (_) {}
         return false;
       }
 
@@ -2018,7 +2012,7 @@ const LitDeX = (() => {
 
     } catch (err) {
       showErr(errId, '⚠ Network error. Check your connection.');
-      try { window.__msResetTurnstile && window.__msResetTurnstile(widgetId); } catch (_) {}
+      try { window.__msToken = ''; window.turnstile && window.turnstile.reset('#cf-ts-ms'); } catch (_) {}
       return false;
     }
   }
