@@ -1512,6 +1512,15 @@
       window.parent && window.parent.postMessage(payload, '*');
       window.parent && window.parent.postMessage({ ...payload, type: 'litdex:mathslash:end' }, '*');
     } catch (_) {}
+    // Reset Turnstile widgets so the player must re-verify before next game
+    try {
+      if (window.turnstile) {
+        const tsStart = document.getElementById('ts-start');
+        const tsRestart = document.getElementById('ts-restart');
+        if (tsStart) window.turnstile.reset(tsStart);
+        if (tsRestart) window.turnstile.reset(tsRestart);
+      }
+    } catch (_) {}
     // Note: do NOT call LitDeX.endSession here — the React parent calls /simple/end.
   }
 
