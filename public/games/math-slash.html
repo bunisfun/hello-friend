@@ -4,59 +4,35 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Math Slash — 3D</title>
+<script src="https://challenges.cloudflare.com/turnstile/v1/api.js" async defer></script>
 <script>
-  // Token captured via callback so we don't depend on getResponse timing
-  window.__msTurnstileTokens = { 'ts-start': '', 'ts-restart': '' };
-  window.__msTurnstileWidgets = { 'ts-start': null, 'ts-restart': null };
-
-  function __msRenderTurnstile(id) {
-    var el = document.getElementById(id);
-    if (!el || !window.turnstile) return;
-    if (el.dataset.tsRendered === '1') return;
-    // Only render when container is actually visible (Turnstile fails in display:none parents)
-    if (el.offsetParent === null) return;
-    try {
-      var wid = window.turnstile.render('#' + id, {
-        sitekey: '0x4AAAAAADS4Y3ec8QgtPM8h',
-        theme: 'dark',
-        callback: function (token) { window.__msTurnstileTokens[id] = token || ''; },
-        'expired-callback': function () { window.__msTurnstileTokens[id] = ''; },
-        'error-callback': function () { window.__msTurnstileTokens[id] = ''; },
-      });
-      window.__msTurnstileWidgets[id] = wid;
-      el.dataset.tsRendered = '1';
-    } catch (e) { console.warn('[Turnstile] render failed for', id, e); }
+  window.__msToken = '';
+  window.__msTurnstileInit = function () {
+    var interval = setInterval(function () {
+      var el = document.getElementById('cf-ts-ms');
+      if (!el) return;
+      if (el.children.length > 0) { clearInterval(interval); return; }
+      if (el.offsetParent === null) return; // wait until visible
+      if (window.turnstile) {
+        try {
+          window.turnstile.render('#cf-ts-ms', {
+            sitekey: '0x4AAAAAADS4Y3ec8QgtPM8h',
+            theme: 'dark',
+            callback: function (t) { window.__msToken = t || ''; },
+            'expired-callback': function () { window.__msToken = ''; },
+            'error-callback': function () { window.__msToken = ''; },
+          });
+          clearInterval(interval);
+        } catch (e) { console.warn('[Turnstile] render error', e); }
+      }
+    }, 300);
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', window.__msTurnstileInit);
+  } else {
+    window.__msTurnstileInit();
   }
-
-  window.__msResetTurnstile = function (id) {
-    window.__msTurnstileTokens[id] = '';
-    var el = document.getElementById(id);
-    if (!el) return;
-    try {
-      if (window.turnstile && el.dataset.tsRendered === '1') {
-        window.turnstile.reset('#' + id);
-      }
-    } catch (e) { /* re-render below */ }
-    // Force a clean re-render so the user gets a fresh challenge widget
-    try {
-      if (window.turnstile && el.dataset.tsRendered === '1') {
-        window.turnstile.remove('#' + id);
-      }
-    } catch (_) {}
-    el.dataset.tsRendered = '';
-    el.innerHTML = '';
-    setTimeout(function () { __msRenderTurnstile(id); }, 50);
-  };
-
-  window.onloadTurnstileCallback = function () {
-    // Poll until containers are visible, then render. Continues for the page lifetime.
-    setInterval(function () {
-      __msRenderTurnstile('ts-start');
-      __msRenderTurnstile('ts-restart');
-    }, 400);
-  };
 </script>
-<script src="https://challenges.cloudflare.com/turnstile/v1/api.js?onload=onloadTurnstileCallback&render=explicit" async defer></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bangers&family=Fredoka+One&family=Permanent+Marker&display=swap');
 
